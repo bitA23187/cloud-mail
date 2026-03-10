@@ -2,10 +2,10 @@
 
 **配置 Github 仓库**
 
-1. Fork 或克隆仓库 [https://github.com/eoao/cloud-mail](https://github.com/eoao/cloud-mail)
+1. Fork 仓库 [https://github.com/maillab/cloud-mail](https://github.com/maillab/cloud-mail)
 2. 进入您的 GitHub 仓库设置
-3. 转到 Settings → Secrets and variables → Actions → New Repository secrets
-4. 添加以下 Secrets：
+3. 在 Settings → Actions → General 中将 Workflow permissions 改为 `Read and write permissions`
+4. 转到 Settings → Secrets and variables → Actions，配置以下 Secrets 或 Variables：
 
 | Secret 名称             | 必需 | 用途                                                  |
 | ----------------------- | :--: | ----------------------------------------------------- |
@@ -34,5 +34,7 @@
 2. 复制到 GitHub Secrets 中的 `CLOUDFLARE_ACCOUNT_ID`
 
 **运行工作流**
-1. 然后在Action页面手动运行工作流，后续同步上游后会自动部署到 Cloudflare Workers。如未配置 `INIT_URL`，则需要手动访问 `https://你的项目域名/api/init/你的jwt_secret` 进行数据库初始化。
-2. 自动同步上游可使用bot或者手动点击Sync Upstream按钮。
+1. 默认部署分支为 `deploy`。首次启用时，在 fork 中创建 `deploy` 分支，或手动运行一次 `Sync upstream into deploy` 工作流让它自动创建。
+2. `Sync upstream into deploy` 会按周从 `maillab/cloud-mail` 的 `main` 合并到 `deploy`，也支持手动运行。
+3. 只有当同步结果改动了 `mail-worker/**` 或 `mail-vue/**` 时，工作流才会继续 dispatch `deploy-cloudflare.yml` 部署到 Cloudflare Workers。
+4. 如未配置 `INIT_URL`，则需要手动访问 `https://你的项目域名/api/init/你的jwt_secret` 进行数据库初始化。

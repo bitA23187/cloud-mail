@@ -1,0 +1,163 @@
+name: 🔄 Sync upstream into deploy
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * 1"
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: sync-upstream-deploy
+  cancel-in-progress: false
+
+env:
+  DEPLOY_BRANCH: deploy
+  UPSTREAM_REPO: https://github.com/maillab/cloud-mail.git
+  UPSTREAM_BRANCH: main
+
+jobs:
+  sync-upstream:
+    name: 🔁 Merge upstream into deploy
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 🚚 检出默认分支 / Checkout default branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 🌿 准备 deploy 分支 / Prepare deploy branch
+        id: prepare
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if git ls-remote --exit-code --heads origin "$DEPLOY_BRANCH" >/dev/null 2>&1; then
+            git fetch origin "$DEPLOY_BRANCH:refs/remotes/origin/$DEPLOY_BRANCH"
+            git checkout -B "$DEPLOY_BRANCH" "refs/remotes/origin/$DEPLOY_BRANCH"
+            echo "branch_created=false" >> "$GITHUB_OUTPUT"
+          else
+            git checkout -B "$DEPLOY_BRANCH"
+            echo "branch_created=true" >> "$GITHUB_OUTPUT"
+            echo "### Deploy branch bootstrap" >> "$GITHUB_STEP_SUMMARY"
+            echo "- Created \`$DEPLOY_BRANCH\` from the current default branch state." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          if git remote get-url upstream >/dev/null 2>&1; then
+            git remote set-url upstream "$UPSTREAM_REPO"
+          else
+            git remote add upstream "$UPSTREAM_REPO"
+          fi
+
+          git fetch upstream "$UPSTREAM_BRANCH"
+
+      - name: 🔀 合并上游 / Merge upstream
+        id: merge
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BEFORE_SHA="$(git rev-parse HEAD)"
+          echo "before_sha=$BEFORE_SHA" >> "$GITHUB_OUTPUT"
+
+          if git merge-base --is-ancestor "upstream/$UPSTREAM_BRANCH" HEAD; then
+            echo "after_sha=$BEFORE_SHA" >> "$GITHUB_OUTPUT"
+            echo "merged=false" >> "$GITHUB_OUTPUT"
+            echo "### Upstream sync" >> "$GITHUB_STEP_SUMMARY"
+            echo "- No new commits from \`upstream/$UPSTREAM_BRANCH\`." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          set +e
+          git merge --no-edit "upstream/$UPSTREAM_BRANCH"
+          MERGE_STATUS=$?
+          set -e
+
+          if [ "$MERGE_STATUS" -ne 0 ]; then
+            git merge --abort || true
+            echo "### Upstream sync failed" >> "$GITHUB_STEP_SUMMARY"
+            echo "- Merge conflict while applying \`upstream/$UPSTREAM_BRANCH\` onto \`$DEPLOY_BRANCH\`." >> "$GITHUB_STEP_SUMMARY"
+            echo "- Resolve the conflict on \`$DEPLOY_BRANCH\` and rerun this workflow." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          AFTER_SHA="$(git rev-parse HEAD)"
+          echo "after_sha=$AFTER_SHA" >> "$GITHUB_OUTPUT"
+          echo "merged=true" >> "$GITHUB_OUTPUT"
+
+      - name: 🧮 判断是否需要推送和部署 / Decide push and deploy
+        id: diff
+        shell: bash
+        env:
+          BRANCH_CREATED: ${{ steps.prepare.outputs.branch_created }}
+          BEFORE_SHA: ${{ steps.merge.outputs.before_sha }}
+          AFTER_SHA: ${{ steps.merge.outputs.after_sha }}
+        run: |
+          set -euo pipefail
+
+          if [ "$BRANCH_CREATED" = "true" ] || [ "$BEFORE_SHA" != "$AFTER_SHA" ]; then
+            echo "push_required=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "push_required=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          if [ "$BRANCH_CREATED" = "true" ]; then
+            echo "needs_deploy=true" >> "$GITHUB_OUTPUT"
+            echo "- Deployment will be triggered because \`$DEPLOY_BRANCH\` was bootstrapped." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          if [ "$BEFORE_SHA" = "$AFTER_SHA" ]; then
+            echo "needs_deploy=false" >> "$GITHUB_OUTPUT"
+            echo "- No repository changes were introduced, so deployment is skipped." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          git diff --name-only "$BEFORE_SHA" "$AFTER_SHA" | tee changed-files.txt
+
+          if grep -Eq '^(mail-worker/|mail-vue/)' changed-files.txt; then
+            echo "needs_deploy=true" >> "$GITHUB_OUTPUT"
+            echo "- Application changes detected under \`mail-worker/\` or \`mail-vue/\`; deployment will run." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "needs_deploy=false" >> "$GITHUB_OUTPUT"
+            echo "- Only non-application files changed; deployment is skipped." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: ⬆️ 推送 deploy 分支 / Push deploy branch
+        if: steps.diff.outputs.push_required == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git push origin "HEAD:$DEPLOY_BRANCH"
+
+      - name: 🚀 触发 Cloudflare 部署 / Dispatch Cloudflare deploy
+        if: steps.diff.outputs.needs_deploy == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          HTTP_CODE="$(
+            curl -sS \
+              -o dispatch-response.txt \
+              -w "%{http_code}" \
+              -X POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/workflows/deploy-cloudflare.yml/dispatches" \
+              -d "{\"ref\":\"$DEPLOY_BRANCH\"}"
+          )"
+
+          if [ "$HTTP_CODE" != "204" ]; then
+            cat dispatch-response.txt
+            exit 1
+          fi
+
+          echo "- Dispatched \`deploy-cloudflare.yml\` on \`$DEPLOY_BRANCH\`." >> "$GITHUB_STEP_SUMMARY"
