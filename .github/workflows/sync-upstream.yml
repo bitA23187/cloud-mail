@@ -75,7 +75,7 @@ jobs:
           fi
 
           set +e
-          git merge --no-edit "upstream/$UPSTREAM_BRANCH"
+          git merge --no-commit --no-ff "upstream/$UPSTREAM_BRANCH"
           MERGE_STATUS=$?
           set -e
 
@@ -86,6 +86,13 @@ jobs:
             echo "- Resolve the conflict on \`$DEPLOY_BRANCH\` and rerun this workflow." >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
+
+          # Keep workflow files owned by this fork so GitHub Actions does not need
+          # permission to push upstream workflow changes back into the repository.
+          git restore --source="$BEFORE_SHA" --staged --worktree .github/workflows
+          echo "- Preserved fork-owned files under \`.github/workflows/\`." >> "$GITHUB_STEP_SUMMARY"
+
+          git commit --no-edit
 
           AFTER_SHA="$(git rev-parse HEAD)"
           echo "after_sha=$AFTER_SHA" >> "$GITHUB_OUTPUT"
