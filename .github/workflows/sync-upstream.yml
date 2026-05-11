@@ -74,8 +74,16 @@ jobs:
             exit 0
           fi
 
+          MERGE_ARGS=(--no-commit --no-ff)
+          if ! git merge-base "upstream/$UPSTREAM_BRANCH" HEAD >/dev/null 2>&1; then
+            MERGE_ARGS+=(--allow-unrelated-histories -X theirs)
+            echo "### ⚠️ Upstream history rewrite detected" >> "$GITHUB_STEP_SUMMARY"
+            echo "- \`upstream/$UPSTREAM_BRANCH\` shares no common ancestor with \`$DEPLOY_BRANCH\`." >> "$GITHUB_STEP_SUMMARY"
+            echo "- Falling back to \`--allow-unrelated-histories -X theirs\`; please review the resulting commit before relying on the deployment." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
           set +e
-          git merge --no-commit --no-ff "upstream/$UPSTREAM_BRANCH"
+          git merge "${MERGE_ARGS[@]}" "upstream/$UPSTREAM_BRANCH"
           MERGE_STATUS=$?
           set -e
 
@@ -87,10 +95,16 @@ jobs:
             exit 1
           fi
 
-          # Keep workflow files owned by this fork so GitHub Actions does not need
-          # permission to push upstream workflow changes back into the repository.
-          git restore --source="$BEFORE_SHA" --staged --worktree .github/workflows
-          echo "- Preserved fork-owned files under \`.github/workflows/\`." >> "$GITHUB_STEP_SUMMARY"
+          # Restore fork-owned paths so GitHub Actions does not need permission
+          # to push upstream workflow/doc changes back into the repository, and
+          # so an unrelated-histories merge does not silently overwrite fork docs.
+          FORK_OWNED_PATHS=(.github/workflows AGENTS.md doc/github-action.md)
+          for path in "${FORK_OWNED_PATHS[@]}"; do
+            if git rev-parse --verify --quiet "$BEFORE_SHA:$path" >/dev/null; then
+              git restore --source="$BEFORE_SHA" --staged --worktree -- "$path"
+            fi
+          done
+          echo "- Preserved fork-owned paths: ${FORK_OWNED_PATHS[*]}." >> "$GITHUB_STEP_SUMMARY"
 
           git commit --no-edit
 
