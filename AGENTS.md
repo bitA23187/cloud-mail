@@ -2,31 +2,31 @@
 
 ## Purpose
 
-This repo is being used to migrate from the existing `freemail` deployment to `cloud-mail` on Cloudflare.
-Do not break or replace the current `freemail` production service during testing.
+This repo hosts the `cloud-mail` deployment on Cloudflare, serving production email at `podbays.com`.
 
 ## Current deployment state
 
-- Existing service still active:
-  - Worker: `mailfree`
-  - URL: `https://mail.podbays.com/`
-- Parallel `cloud-mail` test deployment is active:
+- Production service:
   - Worker: `cloud-mail`
+  - URL: `https://mail.podbays.com/`
+  - Secondary URL: `https://cloudmail.podbays.com/` (alias, can be removed)
   - Workers URL: `https://cloud-mail.seunosleep.workers.dev`
-  - Custom domain: `https://cloudmail.podbays.com/`
-  - Test mail domain: `lab.podbays.com`
-  - Admin email: `admin@lab.podbays.com`
+  - Mail domain: `podbays.com`
+  - Admin email: `admin@podbays.com`
 - GitHub fork automation:
   - Fork repo: `https://github.com/bitA23187/cloud-mail`
   - Local remotes: `origin=bitA23187/cloud-mail`, `upstream=maillab/cloud-mail`
   - Deploy branch: `deploy`
-  - Sync workflow: `Sync upstream into deploy`
-  - Deploy workflow: `Deploy cloud-mail to Cloudflare Workers`
-  - Sync cadence: weekly on Monday at 11:00 Asia/Shanghai (`0 3 * * 1` UTC)
+- Sync workflow: `Sync upstream into deploy`
+- Deploy workflow: `Deploy cloud-mail to Cloudflare Workers`
+- Sync cadence: weekly on Monday at 11:00 Asia/Shanghai (`0 3 * * 1` UTC)
+- Fork-owned automation and deployment docs are sourced from `main` during sync; conflicts in those paths are resolved automatically before upstream application changes are merged into `deploy`.
+- Deployment runtime: Node.js 24 and pnpm 11.
 
-## Cloudflare resources already created
+## Cloudflare resources
 
 - Account ID: `b532fa3dc7f4e9cc0f4528f6a2d4dd47`
+- Zone ID (podbays.com): `dc8cae09338626064d21fb722bc8edba`
 - D1:
   - name: `cloud-mail-db`
   - id: `48e537e4-7f7f-4fbe-8494-00fc7f82ee53`
@@ -46,35 +46,45 @@ Do not break or replace the current `freemail` production service during testing
 
 ## Constraints
 
-- Keep `freemail` untouched until `cloud-mail` is fully verified.
-- Do not move or overwrite `mail.podbays.com` yet.
-- Do not delete existing Cloudflare resources for `mailfree` / `freemail`.
 - Avoid committing secrets into the repo.
+- Keep `mail-vue/.env.podbays` and `mail-worker/wrangler.podbays.toml` local-only; they are intentionally ignored by git.
 
-## What has been verified
+## Cutover history (2026-03-10)
 
-- `cloud-mail` Worker is deployed.
-- `cloudmail.podbays.com` returns the app.
-- D1 schema is initialized.
-- First admin account exists and login was verified.
-- GitHub fork was created and wired as the local `origin`.
-- GitHub Actions variables and secrets needed for the test deployment were configured on the fork.
-- The first `Sync upstream into deploy` workflow run succeeded.
-- The first auto-dispatched `Deploy cloud-mail to Cloudflare Workers` run on `deploy` succeeded.
+The old `freemail` service (`mailfree` Worker) was deleted and replaced by `cloud-mail`:
 
-## Pending tasks
-
-1. Keep deployment isolated to the `cloud-mail` test environment until acceptance is complete.
-2. Monitor future weekly sync runs and handle merge conflicts manually if they occur.
-3. Continue manual setup outside GitHub:
-   - Email Routing for `lab.podbays.com`
-   - Resend sender domain verification
-4. Run acceptance testing for inbound mail, outbound mail, login, and admin flows on `cloudmail.podbays.com`.
-5. Only after acceptance testing, plan cutover from `freemail` to `cloud-mail`.
+1. Deleted `mailfree` Worker, `maill_free_db` D1 database.
+2. R2 buckets `mail` and `mail-eml` (old freemail data) still exist but are unused — can be deleted after emptying.
+3. Deployed `cloud-mail` on `mail.podbays.com` (primary) and `cloudmail.podbays.com` (alias).
+4. Migrated D1 records: user/account emails from `@lab.podbays.com` to `@podbays.com`, updated `r2Domain` and `resendTokens`.
+5. Updated KV cache to match D1.
+6. Email Routing catch-all for `@podbays.com` now points to `cloud-mail` Worker.
+7. GitHub Actions variables updated: `DOMAIN=["podbays.com"]`, `ADMIN=admin@podbays.com`, `CUSTOM_DOMAIN=mail.podbays.com`.
 
 ## Notes for the next session
 
 - Start by checking the latest Actions runs on the fork before changing workflow logic.
-- Read this file plus `doc/podbays-parallel-rollout.md` for the current Podbays test setup.
-- Keep `mail-vue/.env.podbays` and `mail-worker/wrangler.podbays.toml` local-only; they are intentionally ignored by git.
+- Read this file plus `doc/podbays-parallel-rollout.md` for the deployment setup.
 - If GitHub-side changes are needed, continue using the existing deploy workflow rather than inventing a second deployment path.
+- `r2Domain` is set to `mail.podbays.com/api/oss`; images are served via the Worker `/api/oss/*` proxy, not a public R2 domain. If the setting reverts (e.g. after a re-deploy that reinitializes the DB), it must be restored in both D1 (`setting.r2_domain`) and KV cache (`setting:` key).
+- Resend is fully working; both `lab.podbays.com` and `podbays.com` are verified domains. The active token maps `podbays.com`.
+- Consider adding DMARC record: `_dmarc.podbays.com TXT "v=DMARC1; p=none; rua=mailto:admin@podbays.com"`
+- Old freemail R2 buckets (`mail`, `mail-eml`) can be cleaned up when convenient.
+- The 2026-08-17 upstream workflow conflict was fixed in commit `1e00591`; sync run `31996245559` and deploy run `31996260673` both succeeded.
+
+## Knowledge System Layer
+
+This repo now also has a lightweight local knowledge structure:
+
+- `raw/`
+- `notes/`
+- `wiki/`
+
+Default behavior for knowledge work:
+
+1. inspect new material in `raw/`
+2. use `notes/` for working synthesis if needed
+3. promote durable understanding into `wiki/`
+4. keep `wiki/index.md` and `wiki/log.md` current
+
+Never ingest secret-bearing material such as `.env` values, tokens, or credential-bearing config into `wiki/`.
