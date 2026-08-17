@@ -64,13 +64,37 @@ jobs:
           set -euo pipefail
 
           BEFORE_SHA="$(git rev-parse HEAD)"
+          FORK_SOURCE_SHA="$(git rev-parse "$GITHUB_SHA")"
           echo "before_sha=$BEFORE_SHA" >> "$GITHUB_OUTPUT"
 
+          # The default branch is the source of truth for fork-owned automation
+          # and deployment documentation. Restore these paths both after a clean
+          # merge and while resolving conflicts caused by upstream edits.
+          FORK_OWNED_PATHS=(.github/workflows AGENTS.md doc/github-action.md)
+          restore_fork_owned_paths() {
+            for path in "${FORK_OWNED_PATHS[@]}"; do
+              if git rev-parse --verify --quiet "$FORK_SOURCE_SHA:$path" >/dev/null; then
+                git restore --source="$FORK_SOURCE_SHA" --staged --worktree -- "$path"
+              fi
+            done
+          }
+
           if git merge-base --is-ancestor "upstream/$UPSTREAM_BRANCH" HEAD; then
-            echo "after_sha=$BEFORE_SHA" >> "$GITHUB_OUTPUT"
-            echo "merged=false" >> "$GITHUB_OUTPUT"
+            restore_fork_owned_paths
+            if git diff --cached --quiet; then
+              echo "after_sha=$BEFORE_SHA" >> "$GITHUB_OUTPUT"
+              echo "merged=false" >> "$GITHUB_OUTPUT"
+              echo "### Upstream sync" >> "$GITHUB_STEP_SUMMARY"
+              echo "- No new commits from \`upstream/$UPSTREAM_BRANCH\` and fork-owned paths are current." >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+
+            git commit -m "Sync fork-owned paths from default branch"
+            AFTER_SHA="$(git rev-parse HEAD)"
+            echo "after_sha=$AFTER_SHA" >> "$GITHUB_OUTPUT"
+            echo "merged=true" >> "$GITHUB_OUTPUT"
             echo "### Upstream sync" >> "$GITHUB_STEP_SUMMARY"
-            echo "- No new commits from \`upstream/$UPSTREAM_BRANCH\`." >> "$GITHUB_STEP_SUMMARY"
+            echo "- Updated fork-owned paths from default-branch commit \`$FORK_SOURCE_SHA\`." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
 
@@ -87,24 +111,24 @@ jobs:
           MERGE_STATUS=$?
           set -e
 
+          restore_fork_owned_paths
+
           if [ "$MERGE_STATUS" -ne 0 ]; then
-            git merge --abort || true
-            echo "### Upstream sync failed" >> "$GITHUB_STEP_SUMMARY"
-            echo "- Merge conflict while applying \`upstream/$UPSTREAM_BRANCH\` onto \`$DEPLOY_BRANCH\`." >> "$GITHUB_STEP_SUMMARY"
-            echo "- Resolve the conflict on \`$DEPLOY_BRANCH\` and rerun this workflow." >> "$GITHUB_STEP_SUMMARY"
-            exit 1
+            REMAINING_CONFLICTS="$(git diff --name-only --diff-filter=U)"
+            if [ -n "$REMAINING_CONFLICTS" ]; then
+              git merge --abort || true
+              echo "### Upstream sync failed" >> "$GITHUB_STEP_SUMMARY"
+              echo "- Merge conflict while applying \`upstream/$UPSTREAM_BRANCH\` onto \`$DEPLOY_BRANCH\`." >> "$GITHUB_STEP_SUMMARY"
+              echo "- Fork-owned paths were resolved automatically, but these conflicts remain:" >> "$GITHUB_STEP_SUMMARY"
+              printf '%s\n' "$REMAINING_CONFLICTS" | sed 's/^/- `/' | sed 's/$/`/' >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
+
+            echo "### Upstream sync" >> "$GITHUB_STEP_SUMMARY"
+            echo "- Resolved conflicts in fork-owned paths from default-branch commit \`$FORK_SOURCE_SHA\`." >> "$GITHUB_STEP_SUMMARY"
           fi
 
-          # Restore fork-owned paths so GitHub Actions does not need permission
-          # to push upstream workflow/doc changes back into the repository, and
-          # so an unrelated-histories merge does not silently overwrite fork docs.
-          FORK_OWNED_PATHS=(.github/workflows AGENTS.md doc/github-action.md)
-          for path in "${FORK_OWNED_PATHS[@]}"; do
-            if git rev-parse --verify --quiet "$BEFORE_SHA:$path" >/dev/null; then
-              git restore --source="$BEFORE_SHA" --staged --worktree -- "$path"
-            fi
-          done
-          echo "- Preserved fork-owned paths: ${FORK_OWNED_PATHS[*]}." >> "$GITHUB_STEP_SUMMARY"
+          echo "- Synced fork-owned paths from default-branch commit \`$FORK_SOURCE_SHA\`: ${FORK_OWNED_PATHS[*]}." >> "$GITHUB_STEP_SUMMARY"
 
           git commit --no-edit
 
