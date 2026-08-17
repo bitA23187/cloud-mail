@@ -16,6 +16,13 @@ Do not break or replace the current `freemail` production service during testing
   - Custom domain: `https://cloudmail.podbays.com/`
   - Test mail domain: `lab.podbays.com`
   - Admin email: `admin@lab.podbays.com`
+- GitHub fork automation:
+  - Fork repo: `https://github.com/bitA23187/cloud-mail`
+  - Local remotes: `origin=bitA23187/cloud-mail`, `upstream=maillab/cloud-mail`
+  - Deploy branch: `deploy`
+  - Sync workflow: `Sync upstream into deploy`
+  - Deploy workflow: `Deploy cloud-mail to Cloudflare Workers`
+  - Sync cadence: weekly on Monday at 11:00 Asia/Shanghai (`0 3 * * 1` UTC)
 
 ## Cloudflare resources already created
 
@@ -50,31 +57,24 @@ Do not break or replace the current `freemail` production service during testing
 - `cloudmail.podbays.com` returns the app.
 - D1 schema is initialized.
 - First admin account exists and login was verified.
+- GitHub fork was created and wired as the local `origin`.
+- GitHub Actions variables and secrets needed for the test deployment were configured on the fork.
+- The first `Sync upstream into deploy` workflow run succeeded.
+- The first auto-dispatched `Deploy cloud-mail to Cloudflare Workers` run on `deploy` succeeded.
 
 ## Pending tasks
 
-1. Set up "auto sync upstream + auto deploy to Cloudflare" using the user's fork.
-2. Keep deployment isolated to `cloud-mail` test environment first.
-3. Configure GitHub Actions secrets/variables for the fork:
-   - `NAME=cloud-mail`
-   - `CUSTOM_DOMAIN=cloudmail.podbays.com`
-   - `DOMAIN=["lab.podbays.com"]`
-   - `ADMIN=admin@lab.podbays.com`
-   - `CLOUDFLARE_ACCOUNT_ID`
-   - `CLOUDFLARE_API_TOKEN`
-   - `D1_DATABASE_ID`
-   - `KV_NAMESPACE_ID`
-   - `R2_BUCKET_NAME`
-   - `JWT_SECRET`
-4. Add an upstream sync workflow or bot so the fork can regularly pull from `maillab/cloud-mail`.
-5. Ensure sync to the fork's deploy branch triggers `.github/workflows/deploy-cloudflare.yml`.
-6. After automation is stable, continue manual setup outside GitHub:
+1. Keep deployment isolated to the `cloud-mail` test environment until acceptance is complete.
+2. Monitor future weekly sync runs and handle merge conflicts manually if they occur.
+3. Continue manual setup outside GitHub:
    - Email Routing for `lab.podbays.com`
    - Resend sender domain verification
-7. Only after acceptance testing, plan cutover from `freemail` to `cloud-mail`.
+4. Run acceptance testing for inbound mail, outbound mail, login, and admin flows on `cloudmail.podbays.com`.
+5. Only after acceptance testing, plan cutover from `freemail` to `cloud-mail`.
 
 ## Notes for the next session
 
-- The user wants to continue with the automation setup in a fresh session because the previous context became too long.
-- Start by checking current git status and reading this file plus `doc/podbays-parallel-rollout.md`.
-- If GitHub-side changes are needed, prefer using the repo's existing deploy workflow rather than inventing a second deployment path.
+- Start by checking the latest Actions runs on the fork before changing workflow logic.
+- Read this file plus `doc/podbays-parallel-rollout.md` for the current Podbays test setup.
+- Keep `mail-vue/.env.podbays` and `mail-worker/wrangler.podbays.toml` local-only; they are intentionally ignored by git.
+- If GitHub-side changes are needed, continue using the existing deploy workflow rather than inventing a second deployment path.
